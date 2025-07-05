@@ -19,26 +19,30 @@ pub fn main() !void {
     };
 
     std.debug.print("Extracting frames from video...\n", .{});
-    try extractFrames(allocator, "/home/gihyun/Development/video-to-ascii/videos/bad-apple.mp4", temp_dir);
-
-    var frame_files = std.ArrayList([]const u8).init(allocator);
-    defer {
-        for (frame_files.items) |file| {
-            allocator.free(file);
-        }
-        frame_files.deinit();
-    }
-
-    std.debug.print("Getting frame files...\n", .{});
-    try getFrameFiles(allocator, temp_dir, &frame_files);
-    std.debug.print("Found {d} frames.\n", .{frame_files.items.len});
-
-    std.debug.print("Preloading ASCII frames...\n", .{});
-    const frames = try preloadAsciiFrames(allocator, frame_files.items);
-    std.debug.print("Success.\n", .{});
+    var extract_frame_process = try extractFrames(allocator, "/home/gihyun/Development/video-to-ascii/videos/bad-apple.mp4", temp_dir);
 
     std.debug.print("Extracting audio...\n", .{});
-    try extractAudio(allocator);
+    var extract_audio_process = try extractAudio(allocator);
+
+    const t1 = try extract_frame_process.wait();
+    const t2 = try extract_audio_process.wait();
+    if (t1.Exited != 0) {
+        std.debug.print("Failed to extract frames.\n", .{});
+        return;
+    }
+    if (t2.Exited != 0) {
+        std.debug.print("Failed to extract frames.\n", .{});
+        return;
+    }
+
+    std.debug.print("Success.\n", .{});
+
+    std.debug.print("Getting frame files...\n", .{});
+    const frame_files = try getFrameFiles(allocator, temp_dir);
+    std.debug.print("Found {d} frames.\n", .{frame_files.len});
+
+    std.debug.print("Preloading ASCII frames...\n", .{});
+    const frames = try preloadAsciiFrames(allocator, frame_files);
     std.debug.print("Success.\n", .{});
 
     // ???
@@ -140,7 +144,7 @@ fn pixelToAscii(r: u8, g: u8, b: u8) u8 {
     return CHARS[index];
 }
 
-fn extractFrames(allocator: std.mem.Allocator, file_dir: []const u8, output_dir: []const u8) !void {
+fn extractFrames(allocator: std.mem.Allocator, file_dir: []const u8, output_dir: []const u8) !std.process.Child {
     const frame_name = try std.fmt.allocPrint(allocator, "{s}/frame_%04d.bmp", .{output_dir});
     defer allocator.free(frame_name);
     const extract_cmd = [_][]const u8{ "ffmpeg", "-i", file_dir, "-vf", "fps=15", "-y", frame_name };
@@ -149,14 +153,19 @@ fn extractFrames(allocator: std.mem.Allocator, file_dir: []const u8, output_dir:
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
 
-    const term = try child.spawnAndWait();
-    if (term.Exited != 0) {
-        std.debug.print("Failed to extract frames.\n", .{});
-        return;
-    }
+    try child.spawn();
+    return child;
 }
 
-fn getFrameFiles(allocator: std.mem.Allocator, dir_path: []const u8, frame_files: *std.ArrayList([]const u8)) !void {
+fn getFrameFiles(allocator: std.mem.Allocator, dir_path: []const u8) ![][]const u8 {
+    var frame_files = std.ArrayList([]const u8).init(allocator);
+    defer {
+        for (frame_files.items) |file| {
+            allocator.free(file);
+        }
+        frame_files.deinit();
+    }
+
     var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
 
@@ -169,6 +178,9 @@ fn getFrameFiles(allocator: std.mem.Allocator, dir_path: []const u8, frame_files
     }
 
     std.mem.sort([]const u8, frame_files.items, {}, compareStrings);
+
+    const slice = try frame_files.toOwnedSlice();
+    return slice;
 }
 
 fn compareStrings(context: void, a: []const u8, b: []const u8) bool {
@@ -176,18 +188,15 @@ fn compareStrings(context: void, a: []const u8, b: []const u8) bool {
     return std.mem.lessThan(u8, a, b);
 }
 
-fn extractAudio(allocator: std.mem.Allocator) !void {
+fn extractAudio(allocator: std.mem.Allocator) !std.process.Child {
     const cmd = [_][]const u8{ "ffmpeg", "-i", "/home/gihyun/Development/video-to-ascii/videos/bad-apple.mp4", "-vn", "-acodec", "copy", "-y", "output.m4a" };
 
     var child = std.process.Child.init(&cmd, allocator);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
 
-    const term = try child.spawnAndWait();
-    if (term.Exited != 0) {
-        std.debug.print("Failed to extract audio.\n", .{});
-        return;
-    }
+    try child.spawn();
+    return child;
 }
 
 fn playAudio(allocator: std.mem.Allocator) !std.process.Child {
